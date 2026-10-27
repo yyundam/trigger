@@ -4,33 +4,76 @@ import android.Manifest
 import android.app.Activity
 import android.app.AlarmManager
 import android.app.AlertDialog
+import android.app.Dialog
 import android.app.NotificationManager
 import android.app.TimePickerDialog
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.Typeface
+import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.provider.Settings
 import android.text.InputType
+import android.text.TextUtils
 import android.util.TypedValue
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
+import android.view.ViewConfiguration
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
+import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
+import android.widget.FrameLayout
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.LocalTime
 import java.time.YearMonth
+import java.time.temporal.ChronoUnit
 import java.time.temporal.TemporalAdjusters
+import kotlin.math.abs
+
+/** 좌우로 밀면 onSwipe(+1: 다음, -1: 이전). 안쪽 버튼 누르기는 그대로 됨 */
+class SwipeLayout(ctx: Context, private val onSwipe: (Int) -> Unit) : LinearLayout(ctx) {
+    private val slop = ViewConfiguration.get(ctx).scaledTouchSlop
+    private var sx = 0f
+    private var sy = 0f
+
+    override fun onInterceptTouchEvent(e: MotionEvent): Boolean {
+        when (e.actionMasked) {
+            MotionEvent.ACTION_DOWN -> { sx = e.x; sy = e.y }
+            MotionEvent.ACTION_MOVE -> {
+                val dx = e.x - sx
+                val dy = e.y - sy
+                if (abs(dx) > slop * 2 && abs(dx) > abs(dy) * 1.3f) return true
+            }
+        }
+        return false
+    }
+
+    override fun onTouchEvent(e: MotionEvent): Boolean {
+        when (e.actionMasked) {
+            MotionEvent.ACTION_DOWN -> { sx = e.x; sy = e.y }
+            MotionEvent.ACTION_UP -> {
+                val dx = e.x - sx
+                if (abs(dx) > width * 0.12f && abs(dx) > abs(e.y - sy)) onSwipe(if (dx < 0) 1 else -1)
+            }
+        }
+        return true
+    }
+}
 
 /**
  * 한 화면: 날짜(오늘·내일·모레·토·일 + 큰 달력) → 시각 → (메모 선택) → 분류 버튼을 누르면 바로 저장.
@@ -44,13 +87,21 @@ class MainActivity : Activity() {
     private val BG = 0xFFF5F5F2.toInt()
     private val RED = 0xFFD93025.toInt()
     private val BLUE = 0xFF2563EB.toInt()
+    private val GREEN = 0xFF16A34A.toInt()
+    private val TODAY_BG = 0xFFFFF1F0.toInt()
 
     private var selDate: LocalDate? = null
     private var selTime: LocalTime = LocalTime.of(22, 0)
     private var month: YearMonth = YearMonth.now()
     private var askedNotif = false
+    private var saving = false
+
+    private val ui = Handler(Looper.getMainLooper())
+    private var newVersion = 0
+    private var downloadId = -1L
 
     private lateinit var banner: TextView
+    private lateinit var updateBar: TextView
     private lateinit var listBtn: TextView
     private lateinit var quickRow: LinearLayout
     private lateinit var monthTitle: TextView
@@ -59,6 +110,7 @@ class MainActivity : Activity() {
     private lateinit var timeRow: LinearLayout
     private lateinit var memo: EditText
     private lateinit var summary: TextView
+    private lateinit var overlay: FrameLayout
 
     private val presets = listOf(
         LocalTime.of(7, 0), LocalTime.of(9, 0), LocalTime.of(18, 0), LocalTime.of(22, 0)
@@ -86,6 +138,14 @@ class MainActivity : Activity() {
         LinearLayout.LayoutParams(w, h, weight).apply { setMargins(dp(l), dp(t), dp(r), dp(b)) }
 
     private fun row() = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+
+    /** 오늘 / 내일 / 모레 / 그 외엔 날짜 */
+    private fun relDay(d: LocalDate): String = when (ChronoUnit.DAYS.between(LocalDate.now(), d)) {
+        0L -> "오늘"
+        1L -> "내일"
+        2L -> "모레"
+        else -> ""
+    }
 
     // ---------- 화면 만들기 ----------
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -125,20 +185,28 @@ class MainActivity : Activity() {
         }
         root.addView(banner, lp(MATCH_PARENT, -2, 0f, 0, 4))
 
+        updateBar = tv("", 15f, Color.WHITE, true).apply {
+            background = box(GREEN, 0, 10)
+            setPadding(dp(10), dp(9), dp(10), dp(9))
+            visibility = View.GONE
+            setOnClickListener { onUpdateTap() }
+        }
+        root.addView(updateBar, lp(MATCH_PARENT, -2, 0f, 0, 4))
+
         // ① 날짜 빠른 버튼
         quickRow = row()
         root.addView(quickRow, lp(MATCH_PARENT, dp(58), 0f, 0, 8))
 
-        // ① 큰 달력
-        val cal = LinearLayout(this).apply {
+        // ① 큰 달력 (좌우로 밀면 달이 넘어감)
+        val cal = SwipeLayout(this) { dir -> swipeMonth(dir) }.apply {
             orientation = LinearLayout.VERTICAL
             background = box(Color.WHITE, 0, 16)
             setPadding(dp(6), dp(4), dp(6), dp(6))
         }
         val mh = row().apply { gravity = Gravity.CENTER_VERTICAL }
-        prevBtn = tv("‹", 28f, INK).apply { setOnClickListener { moveMonth(-1) } }
+        prevBtn = tv("‹", 28f, INK).apply { setOnClickListener { swipeMonth(-1) } }
         monthTitle = tv("", 17f, INK, true)
-        val nextBtn = tv("›", 28f, INK).apply { setOnClickListener { moveMonth(1) } }
+        val nextBtn = tv("›", 28f, INK).apply { setOnClickListener { swipeMonth(1) } }
         mh.addView(prevBtn, lp(dp(56), MATCH_PARENT))
         mh.addView(monthTitle, lp(0, MATCH_PARENT, 1f))
         mh.addView(nextBtn, lp(dp(56), MATCH_PARENT))
@@ -188,7 +256,17 @@ class MainActivity : Activity() {
             root.addView(rr, lp(MATCH_PARENT, dp(60), 0f, 0, if (r == 0) 2 else 8))
         }
 
-        setContentView(root)
+        // 저장 확인 화면 (평소엔 숨김)
+        overlay = FrameLayout(this).apply {
+            setBackgroundColor(0xCC000000.toInt())
+            visibility = View.GONE
+            isClickable = true
+        }
+
+        val frame = FrameLayout(this)
+        frame.addView(root, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
+        frame.addView(overlay, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
+        setContentView(frame)
         renderAll()
     }
 
@@ -200,6 +278,12 @@ class MainActivity : Activity() {
         renderAll()
         refreshCount()
         checkPermissions()
+        Updater.check(this) { v -> runOnUiThread { showUpdate(v) } }
+    }
+
+    override fun onDestroy() {
+        ui.removeCallbacksAndMessages(null)
+        super.onDestroy()
     }
 
     private fun renderAll() {
@@ -240,11 +324,21 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun moveMonth(delta: Long) {
-        val n = month.plusMonths(delta)
-        if (n.isBefore(YearMonth.now())) return
+    /** 달 넘기기 (버튼·스와이프 공용), 넘어가는 방향으로 살짝 밀려 들어오는 효과 */
+    private fun swipeMonth(dir: Int) {
+        val n = month.plusMonths(dir.toLong())
+        if (n.isBefore(YearMonth.now())) {
+            grid.animate().cancel()
+            grid.translationX = dp(18).toFloat()
+            grid.animate().translationX(0f).setDuration(160).start()
+            return
+        }
         month = n
         renderCalendar()
+        grid.animate().cancel()
+        grid.translationX = dir * grid.width * 0.35f
+        grid.alpha = 0.2f
+        grid.animate().translationX(0f).alpha(1f).setDuration(180).start()
     }
 
     private fun renderCalendar() {
@@ -339,6 +433,7 @@ class MainActivity : Activity() {
 
     // ---------- 저장 ----------
     private fun save(cat: Cat) {
+        if (saving) return
         val d = selDate
         if (d == null) {
             Toast.makeText(this, "날짜를 먼저 눌러주세요", Toast.LENGTH_SHORT).show()
@@ -349,12 +444,51 @@ class MainActivity : Activity() {
             Toast.makeText(this, "이미 지난 시각이에요", Toast.LENGTH_SHORT).show()
             return
         }
+        saving = true
         val a = Alarm(AlarmStore.nextId(this), ms, cat.key, memo.text.toString().trim(), System.currentTimeMillis())
         AlarmStore.put(this, a)
         AlarmScheduler.schedule(this, a)
         hideKeyboard()
-        Toast.makeText(this, "✓ ${Fmt.date(d)} ${Fmt.time(selTime)}  ${cat.emoji} ${cat.label}", Toast.LENGTH_LONG).show()
-        finish()
+        showSaved(a, cat)
+    }
+
+    /** 크게 "저장되었습니다!!" 를 1.8초 보여주고 앱 닫기. 화면을 누르면 바로 닫힘 */
+    private fun showSaved(a: Alarm, cat: Cat) {
+        val x = Fmt.ldt(a.time)
+        val rel = relDay(x.toLocalDate())
+
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            background = box(Color.WHITE, 0, 28)
+            setPadding(dp(24), dp(30), dp(24), dp(28))
+        }
+        card.addView(tv("✓", 52f, Color.WHITE, true).apply {
+            background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(GREEN) }
+        }, LinearLayout.LayoutParams(dp(96), dp(96)))
+        card.addView(tv("저장되었습니다!!", 30f, INK, true), lp(WRAP_CONTENT, WRAP_CONTENT, 0f, 0, 18))
+        val whenTxt = (if (rel.isEmpty()) "" else "$rel ") + "${Fmt.date(x.toLocalDate())}  ${Fmt.time(x.toLocalTime())}"
+        card.addView(tv(whenTxt, 21f, ACCENT, true), lp(WRAP_CONTENT, WRAP_CONTENT, 0f, 0, 12))
+        card.addView(tv("${cat.emoji} ${cat.label}", 21f, cat.color, true), lp(WRAP_CONTENT, WRAP_CONTENT, 0f, 0, 6))
+        if (a.memo.isNotBlank()) {
+            card.addView(tv(a.memo, 17f, SUB).apply {
+                maxLines = 2
+                ellipsize = TextUtils.TruncateAt.END
+            }, lp(WRAP_CONTENT, WRAP_CONTENT, 0f, 0, 6))
+        }
+
+        overlay.removeAllViews()
+        overlay.addView(card, FrameLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT, Gravity.CENTER).apply {
+            setMargins(dp(28), 0, dp(28), 0)
+        })
+        overlay.setOnClickListener { finish() }
+        overlay.alpha = 0f
+        overlay.visibility = View.VISIBLE
+        overlay.animate().alpha(1f).setDuration(150).start()
+        card.scaleX = 0.85f
+        card.scaleY = 0.85f
+        card.animate().scaleX(1f).scaleY(1f).setDuration(220).start()
+        ui.postDelayed({ if (!isFinishing) finish() }, 1800)
     }
 
     private fun hideKeyboard() {
@@ -369,30 +503,91 @@ class MainActivity : Activity() {
         listBtn.text = "예정 $n ›"
     }
 
+    private var listDialog: Dialog? = null
+
     private fun showList() {
+        listDialog?.dismiss()
         val list = AlarmStore.load(this).sortedBy { it.time }
         if (list.isEmpty()) {
             Toast.makeText(this, "예정된 알람이 없어요", Toast.LENGTH_SHORT).show()
             return
         }
         val now = System.currentTimeMillis()
-        val items = list.map {
-            val c = Cats.of(it.cat)
-            val m = if (it.memo.isBlank()) "" else "  · ${it.memo}"
-            val p = if (it.time <= now) "  (지남)" else ""
-            "${Fmt.dateTime(it.time)}   ${c.emoji} ${c.label}$m$p"
-        }.toTypedArray()
-        AlertDialog.Builder(this)
-            .setTitle("예정된 알람 (누르면 삭제)")
-            .setItems(items) { _, i -> confirmDelete(list[i]) }
-            .setNegativeButton("닫기", null)
-            .show()
+        val today = LocalDate.now()
+
+        val col = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(14), dp(16), dp(14), dp(8))
+        }
+        col.addView(tv("예정된 알람", 19f, INK, true).apply { gravity = Gravity.START }, lp(MATCH_PARENT, WRAP_CONTENT))
+        col.addView(tv("누르면 지울 수 있어요", 13f, SUB).apply { gravity = Gravity.START }, lp(MATCH_PARENT, WRAP_CONTENT, 0f, 0, 2, 0, 8))
+
+        for (a in list) {
+            val x = Fmt.ldt(a.time)
+            val d = x.toLocalDate()
+            val isToday = d == today
+            val past = a.time <= now
+            val c = Cats.of(a.cat)
+            val rel = relDay(d)
+
+            val r = row().apply {
+                gravity = Gravity.CENTER_VERTICAL
+                background = box(if (isToday) TODAY_BG else Color.WHITE, if (isToday) RED else LINE, 12)
+                setPadding(dp(10), dp(10), dp(12), dp(10))
+                setOnClickListener { confirmDelete(a) }
+                if (past) alpha = 0.5f
+            }
+            // 왼쪽: 오늘/내일 + 날짜 + 시각
+            val left = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER_HORIZONTAL
+            }
+            if (isToday) {
+                left.addView(tv("오늘", 15f, Color.WHITE, true).apply {
+                    background = box(RED, 0, 8)
+                    setPadding(dp(10), dp(1), dp(10), dp(2))
+                }, lp(WRAP_CONTENT, WRAP_CONTENT))
+            } else if (rel.isNotEmpty()) {
+                left.addView(tv(rel, 15f, ACCENT, true), lp(WRAP_CONTENT, WRAP_CONTENT))
+            }
+            left.addView(tv(Fmt.date(d), 13f, if (isToday) RED else SUB, isToday), lp(WRAP_CONTENT, WRAP_CONTENT, 0f, 0, 2))
+            left.addView(tv(Fmt.time(x.toLocalTime()), 20f, if (isToday) RED else INK, true), lp(WRAP_CONTENT, WRAP_CONTENT))
+            r.addView(left, lp(dp(92), WRAP_CONTENT))
+
+            // 오른쪽: 분류 + 메모
+            val right = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+            right.addView(tv("${c.emoji} ${c.label}" + if (past) "  (지남)" else "", 17f, c.color, true).apply {
+                gravity = Gravity.START
+            }, lp(MATCH_PARENT, WRAP_CONTENT))
+            if (a.memo.isNotBlank()) {
+                right.addView(tv(a.memo, 15f, INK).apply {
+                    gravity = Gravity.START
+                    maxLines = 2
+                    ellipsize = TextUtils.TruncateAt.END
+                }, lp(MATCH_PARENT, WRAP_CONTENT, 0f, 0, 2))
+            }
+            r.addView(right, lp(0, WRAP_CONTENT, 1f, 8))
+            col.addView(r, lp(MATCH_PARENT, WRAP_CONTENT, 0f, 0, 4, 0, 4))
+        }
+        col.addView(tv("닫기", 16f, ACCENT, true).apply {
+            setOnClickListener { listDialog?.dismiss() }
+        }, lp(MATCH_PARENT, dp(48), 0f, 0, 8))
+
+        val scroll = ScrollView(this).apply { addView(col) }
+        val dlg = Dialog(this)
+        dlg.setContentView(scroll)
+        dlg.window?.setBackgroundDrawable(box(BG, 0, 20))
+        dlg.window?.setLayout((resources.displayMetrics.widthPixels * 0.92).toInt(), WRAP_CONTENT)
+        dlg.show()
+        dlg.window?.setLayout((resources.displayMetrics.widthPixels * 0.92).toInt(), WRAP_CONTENT)
+        listDialog = dlg
     }
 
     private fun confirmDelete(a: Alarm) {
         val c = Cats.of(a.cat)
+        val memoLine = if (a.memo.isBlank()) "" else "\n${a.memo}"
         AlertDialog.Builder(this)
-            .setMessage("${Fmt.dateTime(a.time)}  ${c.emoji} ${c.label}\n이 알람을 지울까요?")
+            .setMessage("${Fmt.dateTime(a.time)}  ${c.emoji} ${c.label}$memoLine\n\n이 알람을 지울까요?")
             .setPositiveButton("지우기") { _, _ ->
                 AlarmScheduler.cancel(this, a.id)
                 AlarmStore.remove(this, a.id)
@@ -401,6 +596,48 @@ class MainActivity : Activity() {
             }
             .setNegativeButton("취소", null)
             .show()
+    }
+
+    // ---------- 업데이트 ----------
+    private fun showUpdate(v: Int) {
+        if (isFinishing || downloadId >= 0) return
+        newVersion = v
+        updateBar.text = "🔄 새 버전(v$v)이 있어요 — 눌러서 업데이트"
+        updateBar.visibility = View.VISIBLE
+    }
+
+    private fun onUpdateTap() {
+        if (downloadId >= 0) return
+        try {
+            downloadId = Updater.startDownload(this, newVersion)
+        } catch (_: Exception) {
+            Updater.openInBrowser(this)
+            return
+        }
+        updateBar.text = "⬇ 받는 중… 0%"
+        pollDownload()
+    }
+
+    private fun pollDownload() {
+        val p = Updater.progress(this, downloadId)
+        when {
+            p == 101 -> {
+                updateBar.text = "✓ 다 받았어요 — 설치를 눌러주세요 (안 뜨면 여기 누르기)"
+                val id = downloadId
+                downloadId = -1L
+                updateBar.setOnClickListener { if (!Updater.install(this, id)) Updater.openInBrowser(this) }
+                if (!Updater.install(this, id)) Updater.openInBrowser(this)
+            }
+            p < 0 -> {
+                downloadId = -1L
+                updateBar.text = "받기 실패 — 눌러서 다시"
+                updateBar.setOnClickListener { onUpdateTap() }
+            }
+            else -> {
+                updateBar.text = "⬇ 받는 중… $p%"
+                ui.postDelayed({ pollDownload() }, 500)
+            }
+        }
     }
 
     // ---------- 권한 ----------
