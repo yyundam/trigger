@@ -110,13 +110,12 @@ object Notif {
         )
 
     private fun title(a: Alarm?): String {
-        if (a == null) return "트리거"
-        val c = Cats.of(a.cat)
-        return "${c.emoji} ${c.label}"
+        if (a == null) return "잊지마"
+        return "${Cats.of(a.cat).emoji} ${Fmt.sentence(a)}"
     }
 
     private fun body(a: Alarm?): String =
-        if (a == null || a.memo.isBlank()) "무엇이었을까요?" else a.memo
+        if (a == null || a.memo.isBlank()) "무엇이었는지 떠올려 보세요" else a.memo
 
     fun ringing(ctx: Context, a: Alarm?, id: Int): Notification {
         ensureChannels(ctx)

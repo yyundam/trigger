@@ -15,7 +15,7 @@ import android.view.WindowManager
 import android.widget.LinearLayout
 import android.widget.TextView
 
-/** 알람 화면: 분류를 크게, 메모가 있으면 그 아래에 그대로 */
+/** 알람 화면: 큰 그림 + "내일은 물건 챙기는 날이에요" + 메모 */
 class AlarmActivity : Activity() {
     private var alarmId = -1
 
@@ -67,7 +67,7 @@ class AlarmActivity : Activity() {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(cat.color)
-            setPadding(dp(24), dp(32), dp(24), dp(32))
+            setPadding(dp(22), dp(28), dp(22), dp(28))
             gravity = Gravity.CENTER_HORIZONTAL
         }
 
@@ -75,29 +75,46 @@ class AlarmActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
         }
-        center.addView(label(cat.emoji, 110f))
-        center.addView(label(cat.label, 40f, bold = true))
-        if (a.memo.isNotBlank()) {
-            center.addView(label(a.memo, 28f, bold = true).apply { setPadding(0, dp(24), 0, 0) })
-        } else {
-            center.addView(label("무엇이었을까요?", 24f).apply { setPadding(0, dp(16), 0, 0) })
+        center.addView(label(cat.emoji, 100f))
+        center.addView(label(Fmt.sentence(a), 34f, bold = true).apply { setPadding(0, dp(8), 0, 0) })
+        a.eventDate()?.let { d ->
+            val part = if (a.part.isNotBlank()) " ${a.part}" else ""
+            center.addView(label("${Fmt.dateLong(d)}$part", 20f, alpha = 0.9f).apply { setPadding(0, dp(10), 0, 0) })
         }
-        center.addView(
-            label("${Fmt.dateTime(a.created)}에 맞춤", 14f, alpha = 0.75f)
-                .apply { setPadding(0, dp(20), 0, 0) }
-        )
+        if (a.memo.isNotBlank()) {
+            center.addView(
+                label(a.memo, 28f, bold = true).apply {
+                    setPadding(dp(16), dp(14), dp(16), dp(14))
+                    background = GradientDrawable().apply {
+                        setColor(0x33FFFFFF)
+                        cornerRadius = dp(16).toFloat()
+                    }
+                },
+                LinearLayout.LayoutParams(MATCH_PARENT, -2).apply { topMargin = dp(22) }
+            )
+        }
         root.addView(center, LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f))
 
         root.addView(
-            button("끄기", Color.WHITE, cat.color, 26f) {
-                Actions.done(this, alarmId)
-                finish()
+            button("🔊 다시 듣기", 0x33FFFFFF, Color.WHITE, 20f) {
+                try {
+                    startService(Intent(this, AlarmService::class.java).setAction(AlarmService.ACTION_SPEAK))
+                } catch (_: Exception) {
+                }
             },
-            LinearLayout.LayoutParams(MATCH_PARENT, dp(84))
+            LinearLayout.LayoutParams(MATCH_PARENT, dp(60))
         )
         root.addView(View(this), LinearLayout.LayoutParams(MATCH_PARENT, dp(12)))
         root.addView(
-            button("10분 뒤 다시", 0x33FFFFFF, Color.WHITE, 20f) {
+            button("✓ 확인했어요 (끄기)", Color.WHITE, cat.color, 26f) {
+                Actions.done(this, alarmId)
+                finish()
+            },
+            LinearLayout.LayoutParams(MATCH_PARENT, dp(88))
+        )
+        root.addView(View(this), LinearLayout.LayoutParams(MATCH_PARENT, dp(12)))
+        root.addView(
+            button("10분 뒤 다시 알려줘", 0x33FFFFFF, Color.WHITE, 20f) {
                 Actions.snooze(this, alarmId, 10)
                 finish()
             },

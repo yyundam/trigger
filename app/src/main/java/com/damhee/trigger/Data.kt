@@ -8,30 +8,37 @@ import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.LocalTime
 import java.time.ZoneId
+import java.time.temporal.ChronoUnit
 
-/** 분류 버튼 — 알람이 울릴 때 이것만 크게 보여주고, 무엇이었는지는 스스로 떠올리게 함 */
-data class Cat(val key: String, val emoji: String, val label: String, val color: Int)
+/** 일 종류 — phrase는 "내일은 ___이에요" 로 읽어줄 말 */
+data class Cat(val key: String, val emoji: String, val label: String, val color: Int, val phrase: String)
 
 object Cats {
     val all = listOf(
-        Cat("todo", "✅", "할일", 0xFF2E7D32.toInt()),
-        Cat("item", "📦", "물건", 0xFFE65100.toInt()),
-        Cat("talk", "💬", "말하기", 0xFF1565C0.toInt()),
-        Cat("event", "🎉", "이벤트", 0xFFAD1457.toInt()),
-        Cat("call", "📞", "연락", 0xFF00838F.toInt()),
-        Cat("buy", "🛒", "구매", 0xFF6A1B9A.toInt()),
+        Cat("item", "📦", "물건 챙기기", 0xFFE65100.toInt(), "물건 챙기는 날"),
+        Cat("meet", "👥", "약속·모임", 0xFF1565C0.toInt(), "약속 있는 날"),
+        Cat("hospital", "🏥", "병원", 0xFF00897B.toInt(), "병원 가는 날"),
+        Cat("pay", "💳", "납부·결제", 0xFF6A1B9A.toInt(), "돈 내는 날"),
+        Cat("apply", "🎁", "응모·결과", 0xFF558B2F.toInt(), "응모나 결과 확인하는 날"),
+        Cat("call", "📞", "연락하기", 0xFF00838F.toInt(), "연락하는 날"),
+        Cat("event", "🎂", "기념일·행사", 0xFFC2185B.toInt(), "기념일이나 행사 날"),
+        Cat("todo", "✏️", "기타 할 일", 0xFF455A64.toInt(), "할 일 있는 날"),
     )
 
-    fun of(key: String): Cat = all.firstOrNull { it.key == key } ?: all[0]
+    fun of(key: String): Cat = all.firstOrNull { it.key == key } ?: all.last()
 }
 
 data class Alarm(
     val id: Int,
     val time: Long,      // 울릴 시각 (epoch ms)
     val cat: String,
-    val memo: String,    // 선택 입력 — 힌트로만 보여줌
+    val memo: String,
     val created: Long,   // 맞춘 시각
-)
+    val event: Long = -1L, // 일이 있는 날 (epochDay), 없으면 -1
+    val part: String = "", // 오전/오후/저녁 (없으면 "")
+) {
+    fun eventDate(): LocalDate? = if (event >= 0) LocalDate.ofEpochDay(event) else null
+}
 
 object AlarmStore {
     private const val PREF = "trigger"
@@ -50,7 +57,8 @@ object AlarmStore {
                 val o = arr.getJSONObject(i)
                 out += Alarm(
                     o.getInt("id"), o.getLong("time"), o.optString("cat", "todo"),
-                    o.optString("memo", ""), o.optLong("created", 0L)
+                    o.optString("memo", ""), o.optLong("created", 0L),
+                    o.optLong("event", -1L), o.optString("part", "")
                 )
             }
         } catch (_: Exception) {
@@ -65,6 +73,7 @@ object AlarmStore {
             arr.put(
                 JSONObject().put("id", it.id).put("time", it.time).put("cat", it.cat)
                     .put("memo", it.memo).put("created", it.created)
+                    .put("event", it.event).put("part", it.part)
             )
         }
         prefs(ctx).edit().putString(KEY, arr.toString()).apply()
@@ -102,30 +111,63 @@ object AlarmStore {
         val list = load(ctx)
         if (list.removeAll { it.time < cut }) save(ctx, list)
     }
-
-    fun lastTime(ctx: Context): LocalTime {
-        val m = prefs(ctx).getInt("last_time", 22 * 60)
-        return LocalTime.of(m / 60, m % 60)
-    }
-
-    fun setLastTime(ctx: Context, t: LocalTime) {
-        prefs(ctx).edit().putInt("last_time", t.hour * 60 + t.minute).apply()
-    }
 }
 
 object Fmt {
     private val dows = arrayOf("월", "화", "수", "목", "금", "토", "일")
     fun dow(d: LocalDate) = dows[d.dayOfWeek.value - 1]
+
+    /** 10/31(금) */
     fun date(d: LocalDate) = "${d.monthValue}/${d.dayOfMonth}(${dow(d)})"
-    fun time(t: LocalTime) = String.format("%02d:%02d", t.hour, t.minute)
+
+    /** 10월 31일 금요일 */
+    fun dateLong(d: LocalDate) = "${d.monthValue}월 ${d.dayOfMonth}일 ${dow(d)}요일"
+
+    /** 22:00 → 밤 10시, 07:30 → 아침 7시 30분 */
+    fun kor(t: LocalTime): String {
+        val h = t.hour
+        val (w, hh) = when (h) {
+            in 0..4 -> "새벽" to (if (h == 0) 12 else h)
+            in 5..8 -> "아침" to h
+            in 9..11 -> "오전" to h
+            12 -> "낮" to 12
+            in 13..17 -> "오후" to h - 12
+            in 18..20 -> "저녁" to h - 12
+            else -> "밤" to h - 12
+        }
+        return "$w ${hh}시" + if (t.minute > 0) " ${t.minute}분" else ""
+    }
+
+    /** 오늘/내일/모레, 그 외엔 "" */
+    fun rel(d: LocalDate, from: LocalDate = LocalDate.now()): String =
+        when (ChronoUnit.DAYS.between(from, d)) {
+            0L -> "오늘"
+            1L -> "내일"
+            2L -> "모레"
+            else -> ""
+        }
+
     fun ldt(ms: Long): LocalDateTime =
         LocalDateTime.ofInstant(Instant.ofEpochMilli(ms), ZoneId.systemDefault())
 
     fun dateTime(ms: Long): String {
         val x = ldt(ms)
-        return "${date(x.toLocalDate())} ${time(x.toLocalTime())}"
+        return "${date(x.toLocalDate())} ${kor(x.toLocalTime())}"
     }
 
-    fun toMs(d: LocalDate, t: LocalTime): Long =
-        LocalDateTime.of(d, t).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+    fun toMs(x: LocalDateTime): Long = x.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+
+    /** 알람이 울릴 때 보여주고 읽어줄 문장: "내일은 물건 챙기는 날이에요" */
+    fun sentence(a: Alarm): String {
+        val c = Cats.of(a.cat)
+        val ev = a.eventDate() ?: return "${c.label} 알림이에요"
+        val ring = ldt(a.time).toLocalDate()
+        val who = when (ChronoUnit.DAYS.between(ring, ev)) {
+            0L -> "오늘은"
+            1L -> "내일은"
+            2L -> "모레는"
+            else -> "${ev.monthValue}월 ${ev.dayOfMonth}일은"
+        }
+        return "$who ${c.phrase}이에요"
+    }
 }
