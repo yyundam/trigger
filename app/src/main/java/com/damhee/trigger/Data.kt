@@ -104,6 +104,15 @@ object AlarmStore {
         save(ctx, list)
     }
 
+    fun lastTime(ctx: Context): LocalTime {
+        val m = prefs(ctx).getInt("last_time", 21 * 60)
+        return LocalTime.of(m / 60, m % 60)
+    }
+
+    fun setLastTime(ctx: Context, t: LocalTime) {
+        prefs(ctx).edit().putInt("last_time", t.hour * 60 + t.minute).apply()
+    }
+
     /** 이틀 넘게 지난 알람은 정리 */
     @Synchronized
     fun prune(ctx: Context) {
@@ -160,7 +169,7 @@ object Fmt {
     /** 알람이 울릴 때 보여주고 읽어줄 문장: "내일은 물건 챙기는 날이에요" */
     fun sentence(a: Alarm): String {
         val c = Cats.of(a.cat)
-        val ev = a.eventDate() ?: return "${c.label} 알림이에요"
+        val ev = a.eventDate() ?: return "${c.label}, 잊지 마세요"
         val ring = ldt(a.time).toLocalDate()
         val who = when (ChronoUnit.DAYS.between(ring, ev)) {
             0L -> "오늘은"
