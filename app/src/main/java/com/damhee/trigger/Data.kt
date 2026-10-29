@@ -25,7 +25,11 @@ object Cats {
         Cat("todo", "✏️", "기타 할 일", 0xFF455A64.toInt(), "할 일 있는 날"),
     )
 
-    fun of(key: String): Cat = all.firstOrNull { it.key == key } ?: all.last()
+    /** 음성메모만 남기고 종류는 안 고른 경우 */
+    val memo = Cat("memo", "🎙", "음성메모", 0xFF37474F.toInt(), "메모 남긴 날")
+
+    fun of(key: String): Cat =
+        all.firstOrNull { it.key == key } ?: if (key == "memo") memo else all.last()
 }
 
 data class Alarm(

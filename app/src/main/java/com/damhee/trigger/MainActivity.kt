@@ -40,9 +40,9 @@ import java.time.temporal.TemporalAdjusters
 import java.util.Locale
 
 /**
- * 2단계:
- *  ① 언제 알려줄까?  — 날짜 박스 → (밝아지는) 시각 박스. 시각을 누르면 ②로
- *  ② 무슨 일 알려줄까? — 🎙 음성메모(말하면 글자로) + 큰 타일. 타일을 누르면 저장
+ * 2단계 (무엇 → 언제):
+ *  ① 무엇을 잊지 말까요? — 🎙 음성메모 [확인][다시][지우기]  또는  큰 종류 타일  → 누르면 ②로
+ *  ② 언제 알려드릴까요? — 날짜 박스 → (밝아지는) 시각 박스. 시각을 누르면 저장
  *  저장 화면은 5초 동안 보여주고 소리로도 읽어줌
  */
 class MainActivity : Activity() {
@@ -63,8 +63,8 @@ class MainActivity : Activity() {
     private val STAR = 0xFFB45309.toInt()
 
     private var step = 1
+    private var selCat: Cat? = null
     private var selDate: LocalDate? = null
-    private var remindAt: LocalDateTime? = null
     private var memoText = ""
 
     private var askedNotif = false
@@ -175,9 +175,8 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         if (!saving) {
-            if (selDate?.isBefore(LocalDate.now()) == true) { selDate = null; step = 1 }
-            val r = remindAt
-            if (step == 2 && r != null && !r.isAfter(LocalDateTime.now())) step = 1
+            if (selDate?.isBefore(LocalDate.now()) == true) selDate = null
+            if (step == 2 && selCat == null) step = 1
             render()
         }
         checkPermissions()
@@ -197,7 +196,7 @@ class MainActivity : Activity() {
     private fun render() {
         renderTop()
         content.removeAllViews()
-        if (step == 1) renderStep1() else renderStep2()
+        if (step == 1) renderWhat() else renderWhen()
     }
 
     private fun renderTop() {
@@ -226,6 +225,7 @@ class MainActivity : Activity() {
         if (overlay.visibility == View.VISIBLE) return
         if (step == 2) {
             step = 1
+            selCat = null
             render()
         } else finish()
     }
@@ -233,7 +233,94 @@ class MainActivity : Activity() {
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() = goBack()
 
-    // ---------- ① 언제 알려줄까? ----------
+    // ---------- ① 무엇을 잊지 말까요? ----------
+    private fun renderWhat() {
+        title("무엇을 잊지 말까요?")
+
+        if (memoText.isBlank()) {
+            content.addView(tv("🎙 음성메모  (말로 남기기)", 21f, Color.WHITE, true).apply {
+                background = box(ACCENT, 0, 16)
+                setOnClickListener { startVoice() }
+            }, lp(MATCH_PARENT, dp(66), 0f, 0, 0, 0, 8))
+            content.addView(tv("또는 아래에서 종류를 눌러주세요", 15f, SUB), lp(MATCH_PARENT, WRAP_CONTENT, 0f, 0, 0, 0, 6))
+        } else {
+            // 녹음한 메모 + [확인][다시][지우기]
+            val card = col().apply {
+                background = box(CARD, ACCENT, 16, 3)
+                setPadding(dp(14), dp(12), dp(14), dp(12))
+            }
+            card.addView(tv("🎙 “$memoText”", 22f, INK, true).apply {
+                gravity = Gravity.START
+                maxLines = 3
+                ellipsize = TextUtils.TruncateAt.END
+            }, lp(MATCH_PARENT, WRAP_CONTENT, 0f, 0, 0, 0, 10))
+            val br = row()
+            br.addView(tv("✓ 확인", 21f, Color.WHITE, true).apply {
+                background = box(GREEN, 0, 14)
+                setOnClickListener { selCat = Cats.memo; step = 2; render() }
+            }, lp(0, MATCH_PARENT, 1.5f))
+            br.addView(tv("다시", 18f, ACCENT, true).apply {
+                background = box(ACCENT_BG, 0, 14)
+                setOnClickListener { startVoice() }
+            }, lp(0, MATCH_PARENT, 1f, 6))
+            br.addView(tv("지우기", 18f, RED, true).apply {
+                background = box(TODAY_BG, 0, 14)
+                setOnClickListener { memoText = ""; render() }
+            }, lp(0, MATCH_PARENT, 1f, 6))
+            card.addView(br, lp(MATCH_PARENT, dp(58)))
+            content.addView(card, lp(MATCH_PARENT, WRAP_CONTENT, 0f, 0, 0, 0, 8))
+            content.addView(tv("확인을 누르면 이 메모만 남겨요 · 종류도 같이 고르려면 아래를 눌러요", 14f, SUB),
+                lp(MATCH_PARENT, WRAP_CONTENT, 0f, 0, 0, 0, 6))
+        }
+
+        // 큰 타일 2칸 × 4줄 — 누르면 ②로
+        val cats = Cats.all
+        for (i in cats.indices step 2) {
+            val rr = row()
+            for (j in 0..1) {
+                val c = cats.getOrNull(i + j) ?: continue
+                val t = col().apply {
+                    gravity = Gravity.CENTER
+                    background = box(c.color, 0, 18)
+                    setOnClickListener { selCat = c; step = 2; render() }
+                }
+                t.addView(tv(c.emoji, 30f))
+                t.addView(tv(c.label, 20f, Color.WHITE, true))
+                rr.addView(t, lp(0, MATCH_PARENT, 1f, if (j == 0) 0 else 5, 0, if (j == 0) 5 else 0))
+            }
+            content.addView(rr, lp(MATCH_PARENT, 0, 1f, 0, 5, 0, 5))
+        }
+    }
+
+    private val VOICE = 77
+
+    private fun startVoice() {
+        val i = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+            .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            .putExtra(RecognizerIntent.EXTRA_LANGUAGE, "ko-KR")
+            .putExtra(RecognizerIntent.EXTRA_PROMPT, "무엇을 잊지 말까요? 말씀해 주세요")
+        try {
+            @Suppress("DEPRECATION")
+            startActivityForResult(i, VOICE)
+        } catch (_: Exception) {
+            Toast.makeText(this, "이 폰에서는 음성 인식을 쓸 수 없어요", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        @Suppress("DEPRECATION")
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == VOICE && resultCode == RESULT_OK) {
+            val said = data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull() ?: return
+            memoText = said.trim()
+            step = 1
+            selCat = null
+            render()
+        }
+    }
+
+    // ---------- ② 언제 알려드릴까요? ----------
     private fun quickDates(): List<Pair<String, LocalDate>> {
         val t = LocalDate.now()
         val base = listOf("오늘" to t, "내일" to t.plusDays(1), "모레" to t.plusDays(2))
@@ -246,8 +333,19 @@ class MainActivity : Activity() {
         return base + ends
     }
 
-    private fun renderStep1() {
-        title("언제 알려줄까?")
+    private fun renderWhen() {
+        val cat = selCat ?: run { step = 1; render(); return }
+        title("언제 알려드릴까요?")
+
+        // 방금 고른 내용을 위에 보여줌
+        val what = if (memoText.isNotBlank()) "${cat.emoji} “$memoText”" else "${cat.emoji} ${cat.label}"
+        val extra = if (memoText.isNotBlank() && cat.key != "memo") "   ·   ${cat.label}" else ""
+        content.addView(tv(what + extra, 20f, cat.color, true).apply {
+            background = box(CARD, cat.color, 14)
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+            maxLines = 2
+            ellipsize = TextUtils.TruncateAt.END
+        }, lp(MATCH_PARENT, WRAP_CONTENT, 0f, 0, 0, 0, 10))
 
         // ── 날짜 박스 ──
         val dateBox = col().apply {
@@ -313,7 +411,7 @@ class MainActivity : Activity() {
                         star -> box(STAR_BG, STAR, 14)
                         else -> box(BTN, 0, 14)
                     }
-                    if (active && !past) setOnClickListener { pickTime(d!!, t) }
+                    if (active && !past) setOnClickListener { pickTime(cat, d!!, t) }
                 }
                 b.addView(tv(txt, 22f, if (past) FAINT else INK, true))
                 if (star) b.addView(tv("⭐ 지난번", 11f, STAR, true))
@@ -328,21 +426,14 @@ class MainActivity : Activity() {
                 TimePickerDialog(this@MainActivity, { _, h, m ->
                     val x = LocalDateTime.of(d!!, LocalTime.of(h, m))
                     if (!x.isAfter(LocalDateTime.now())) Toast.makeText(this@MainActivity, "이미 지난 시각이에요", Toast.LENGTH_SHORT).show()
-                    else pickTime(d, LocalTime.of(h, m))
+                    else pickTime(cat, d, LocalTime.of(h, m))
                 }, last.hour, last.minute, false).show()
             }
         }, lp(MATCH_PARENT, dp(54), 0f, 0, 6))
         content.addView(timeBox, lp(MATCH_PARENT, 0, 1f, 0, 10))
     }
 
-    private fun pickTime(d: LocalDate, t: LocalTime) {
-        remindAt = LocalDateTime.of(d, t)
-        AlarmStore.setLastTime(this, t)
-        step = 2
-        render()
-    }
-
-    /** 큰 달력 (◀ ▶ 로 달 넘기기) */
+    /** 큰 달력 — 오늘은 빨간 칸 + "오늘" 글자, 맨 위에도 오늘 날짜 안내 */
     private fun showCalendar() {
         var month = YearMonth.from(selDate ?: LocalDate.now())
         if (month.isBefore(YearMonth.now())) month = YearMonth.now()
@@ -352,6 +443,12 @@ class MainActivity : Activity() {
         fun draw() {
             c0.removeAllViews()
             val today = LocalDate.now()
+
+            c0.addView(tv("오늘은 ${Fmt.dateLong(today)}", 19f, RED, true).apply {
+                background = box(TODAY_BG, RED, 12)
+                setPadding(dp(10), dp(8), dp(10), dp(8))
+            }, lp(MATCH_PARENT, WRAP_CONTENT, 0f, 0, 0, 0, 8))
+
             val mh = row().apply { gravity = Gravity.CENTER_VERTICAL }
             val canPrev = month.isAfter(YearMonth.now())
             mh.addView(tv("◀", 24f, if (canPrev) INK else FAINT, true).apply {
@@ -369,134 +466,61 @@ class MainActivity : Activity() {
                 wk.addView(tv(s, 15f, when (i) { 0 -> RED; 6 -> BLUE; else -> SUB }, true), lp(0, MATCH_PARENT, 1f))
             }
             c0.addView(wk, lp(MATCH_PARENT, dp(32), 0f, 0, 6))
+
             val offset = month.atDay(1).dayOfWeek.value % 7
             val days = month.lengthOfMonth()
-            for (r in 0 until 6) {
+            val rowsNeeded = (offset + days + 6) / 7
+            for (r in 0 until rowsNeeded) {
                 val rr = row()
                 for (c in 0 until 7) {
                     val day = r * 7 + c - offset + 1
-                    val cell = tv("", 21f, INK, true)
+                    val cell = col().apply { gravity = Gravity.CENTER }
                     if (day in 1..days) {
                         val d = month.atDay(day)
                         val past = d.isBefore(today)
-                        cell.text = day.toString()
-                        cell.setTextColor(when { past -> FAINT; c == 0 -> RED; c == 6 -> BLUE; else -> INK })
-                        if (past) cell.typeface = Typeface.DEFAULT
+                        val isToday = d == today
+                        val selected = d == selDate
+                        val numColor = when {
+                            selected || isToday -> Color.WHITE
+                            past -> FAINT
+                            c == 0 -> RED
+                            c == 6 -> BLUE
+                            else -> INK
+                        }
+                        cell.addView(tv(day.toString(), 21f, numColor, !past))
+                        if (isToday) cell.addView(tv("오늘", 11f, Color.WHITE, true))
                         cell.background = when {
-                            d == selDate -> box(ACCENT, 0, 12).also { cell.setTextColor(Color.WHITE) }
-                            d == today -> box(Color.TRANSPARENT, ACCENT, 12)
+                            selected -> box(ACCENT, 0, 12)
+                            isToday -> box(RED, 0, 12)
                             else -> null
                         }
                         if (!past) cell.setOnClickListener { selDate = d; dlg.dismiss(); render() }
                     }
                     rr.addView(cell, lp(0, MATCH_PARENT, 1f, 2, 2, 2, 2))
                 }
-                c0.addView(rr, lp(MATCH_PARENT, dp(52)))
+                c0.addView(rr, lp(MATCH_PARENT, dp(54)))
             }
             c0.addView(tv("닫기", 18f, ACCENT, true).apply { setOnClickListener { dlg.dismiss() } },
                 lp(MATCH_PARENT, dp(50), 0f, 0, 6))
         }
         draw()
-        dlg.setContentView(c0)
+        dlg.setContentView(ScrollView(this).apply { addView(c0) })
         dlg.window?.setBackgroundDrawable(box(CARD, 0, 22))
         dlg.show()
         dlg.window?.setLayout((resources.displayMetrics.widthPixels * 0.95).toInt(), WRAP_CONTENT)
     }
 
-    // ---------- ② 무슨 일 알려줄까? ----------
-    private fun renderStep2() {
-        val r = remindAt ?: run { step = 1; render(); return }
-        title("무슨 일 알려줄까?")
-        val rel = Fmt.rel(r.toLocalDate())
-        content.addView(tv("🔔 ${if (rel.isNotEmpty()) "$rel " else ""}${Fmt.date(r.toLocalDate())} ${Fmt.kor(r.toLocalTime())}", 19f, ACCENT, true).apply {
-            background = box(ACCENT_BG, 0, 14)
-            setPadding(dp(12), dp(10), dp(12), dp(10))
-        }, lp(MATCH_PARENT, WRAP_CONTENT, 0f, 0, 0, 0, 10))
-
-        // 🎙 음성메모 (말하면 글자로)
-        if (memoText.isBlank()) {
-            content.addView(tv("🎙 음성메모", 21f, Color.WHITE, true).apply {
-                background = box(ACCENT, 0, 16)
-                setOnClickListener { startVoice() }
-            }, lp(MATCH_PARENT, dp(64), 0f, 0, 0, 0, 10))
-        } else {
-            val mr = row().apply {
-                gravity = Gravity.CENTER_VERTICAL
-                background = box(CARD, ACCENT, 16)
-                setPadding(dp(14), dp(6), dp(8), dp(6))
-            }
-            mr.addView(tv("🎙 “$memoText”", 19f, INK, true).apply {
-                gravity = Gravity.START or Gravity.CENTER_VERTICAL
-                maxLines = 2
-                ellipsize = TextUtils.TruncateAt.END
-            }, lp(0, MATCH_PARENT, 1f))
-            mr.addView(tv("다시", 16f, ACCENT, true).apply {
-                background = box(ACCENT_BG, 0, 12)
-                setOnClickListener { startVoice() }
-            }, lp(dp(58), dp(46), 0f, 6))
-            mr.addView(tv("지우기", 16f, RED, true).apply {
-                background = box(TODAY_BG, 0, 12)
-                setOnClickListener { memoText = ""; render() }
-            }, lp(dp(66), dp(46), 0f, 6))
-            content.addView(mr, lp(MATCH_PARENT, dp(70), 0f, 0, 0, 0, 10))
-        }
-
-        // 큰 타일 2칸 × 4줄 — 누르면 저장
-        val cats = Cats.all
-        for (i in cats.indices step 2) {
-            val rr = row()
-            for (j in 0..1) {
-                val c = cats.getOrNull(i + j) ?: continue
-                val t = col().apply {
-                    gravity = Gravity.CENTER
-                    background = box(c.color, 0, 18)
-                    setOnClickListener { save(c) }
-                }
-                t.addView(tv(c.emoji, 32f))
-                t.addView(tv(c.label, 21f, Color.WHITE, true))
-                rr.addView(t, lp(0, MATCH_PARENT, 1f, if (j == 0) 0 else 5, 0, if (j == 0) 5 else 0))
-            }
-            content.addView(rr, lp(MATCH_PARENT, 0, 1f, 0, 5, 0, 5))
-        }
-    }
-
-    private val VOICE = 77
-
-    private fun startVoice() {
-        val i = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
-            .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            .putExtra(RecognizerIntent.EXTRA_LANGUAGE, "ko-KR")
-            .putExtra(RecognizerIntent.EXTRA_PROMPT, "메모를 말씀해 주세요")
-        try {
-            @Suppress("DEPRECATION")
-            startActivityForResult(i, VOICE)
-        } catch (_: Exception) {
-            Toast.makeText(this, "이 폰에서는 음성 인식을 쓸 수 없어요", Toast.LENGTH_LONG).show()
-        }
-    }
-
-    @Deprecated("Deprecated in Java")
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        @Suppress("DEPRECATION")
-        super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode == VOICE && resultCode == RESULT_OK) {
-            val said = data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull() ?: return
-            memoText = said.trim()
-            render()
-        }
-    }
-
-    // ---------- 저장 ----------
-    private fun save(cat: Cat) {
+    // ---------- 저장 (시각을 누르면) ----------
+    private fun pickTime(cat: Cat, d: LocalDate, t: LocalTime) {
         if (saving) return
-        val r = remindAt ?: return
-        val ms = Fmt.toMs(r)
+        val ms = Fmt.toMs(LocalDateTime.of(d, t))
         if (ms <= System.currentTimeMillis() + 10_000L) {
-            Toast.makeText(this, "알림 시각이 이미 지났어요. 다시 골라주세요", Toast.LENGTH_LONG).show()
-            step = 1; render()
+            Toast.makeText(this, "이미 지난 시각이에요. 다시 골라주세요", Toast.LENGTH_LONG).show()
+            render()
             return
         }
         saving = true
+        AlarmStore.setLastTime(this, t)
         val a = Alarm(AlarmStore.nextId(this), ms, cat.key, memoText, System.currentTimeMillis())
         AlarmStore.put(this, a)
         AlarmScheduler.schedule(this, a)
@@ -521,9 +545,11 @@ class MainActivity : Activity() {
         card.addView(tv("🔔 $whenTxt\n${Fmt.kor(x.toLocalTime())}에", 23f, ACCENT, true).apply {
             setLineSpacing(0f, 1.15f)
         }, lp(WRAP_CONTENT, WRAP_CONTENT, 0f, 0, 16))
-        card.addView(tv("${cat.emoji} ${cat.label}", 25f, cat.color, true), lp(WRAP_CONTENT, WRAP_CONTENT, 0f, 0, 8))
+        if (cat.key != "memo") {
+            card.addView(tv("${cat.emoji} ${cat.label}", 25f, cat.color, true), lp(WRAP_CONTENT, WRAP_CONTENT, 0f, 0, 8))
+        }
         if (a.memo.isNotBlank()) {
-            card.addView(tv("“${a.memo}”", 19f, INK).apply {
+            card.addView(tv("🎙 “${a.memo}”", 22f, INK, true).apply {
                 maxLines = 3
                 ellipsize = TextUtils.TruncateAt.END
             }, lp(WRAP_CONTENT, WRAP_CONTENT, 0f, 0, 8))
@@ -553,7 +579,8 @@ class MainActivity : Activity() {
 
         // 소리로 읽어주기
         if (ttsReady) {
-            val say = "$whenTxt ${Fmt.kor(x.toLocalTime())}에 ${cat.label} 알려드릴게요"
+            val what = if (a.memo.isNotBlank()) a.memo else cat.label
+            val say = "$whenTxt ${Fmt.kor(x.toLocalTime())}에 $what 알려드릴게요"
             tts?.speak(say, TextToSpeech.QUEUE_FLUSH, null, "saved")
         }
         // 5초 카운트다운
