@@ -115,7 +115,7 @@ object Notif {
     }
 
     private fun body(a: Alarm?): String =
-        if (a == null || a.memo.isBlank()) "무엇이었는지 떠올려 보세요" else a.memo
+        "잊지 마세요"
 
     fun ringing(ctx: Context, a: Alarm?, id: Int): Notification {
         ensureChannels(ctx)

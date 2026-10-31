@@ -63,7 +63,7 @@ class AlarmService : Service() {
         currentId = id
         timedOut = false
         spoken = 0
-        speakText = Fmt.sentence(a) + "." + if (a.memo.isNotBlank()) " 메모. ${a.memo}." else ""
+        speakText = Fmt.sentence(a) + ". 잊지 마세요."
         startRinging()
         initTts()
         try {
