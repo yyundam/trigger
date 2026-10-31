@@ -15,7 +15,7 @@ import android.view.WindowManager
 import android.widget.LinearLayout
 import android.widget.TextView
 
-/** 알람 화면: 큰 그림 + "내일은 물건 챙기는 날이에요" + 메모 */
+/** 알람 화면: 아이콘 + 남겨둔 내용을 아주 크게 + "잊지 마세요" */
 class AlarmActivity : Activity() {
     private var alarmId = -1
 
@@ -76,23 +76,8 @@ class AlarmActivity : Activity() {
             gravity = Gravity.CENTER
         }
         center.addView(label(cat.emoji, 100f))
-        center.addView(label(Fmt.sentence(a), 34f, bold = true).apply { setPadding(0, dp(8), 0, 0) })
-        a.eventDate()?.let { d ->
-            val part = if (a.part.isNotBlank()) " ${a.part}" else ""
-            center.addView(label("${Fmt.dateLong(d)}$part", 20f, alpha = 0.9f).apply { setPadding(0, dp(10), 0, 0) })
-        }
-        if (a.memo.isNotBlank()) {
-            center.addView(
-                label(a.memo, 28f, bold = true).apply {
-                    setPadding(dp(16), dp(14), dp(16), dp(14))
-                    background = GradientDrawable().apply {
-                        setColor(0x33FFFFFF)
-                        cornerRadius = dp(16).toFloat()
-                    }
-                },
-                LinearLayout.LayoutParams(MATCH_PARENT, -2).apply { topMargin = dp(22) }
-            )
-        }
+        center.addView(label(Fmt.sentence(a), 42f, bold = true).apply { setPadding(0, dp(16), 0, 0) })
+        center.addView(label("잊지 마세요", 22f, alpha = 0.9f).apply { setPadding(0, dp(18), 0, 0) })
         root.addView(center, LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f))
 
         root.addView(
@@ -140,6 +125,6 @@ class AlarmActivity : Activity() {
 
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
-        // 뒤로가기로는 안 꺼짐 — 끄기나 10분 뒤를 눌러야 함
+        // 뒤로가기로는 안 꺼짐 — 확인했어요나 10분 뒤를 눌러야 함
     }
 }
